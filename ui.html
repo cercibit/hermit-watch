@@ -328,7 +328,7 @@ let playing = null;   // {kind:'clip', id} or {kind:'timelapse', date}
 function play(item) {
   playing = item;
   const live = $('live'), v = $('player');
-  live.src = '';                       // stop pulling the MJPEG stream while watching a recording
+  live.removeAttribute('src');         // stop pulling the MJPEG stream while watching a recording
   if (item.kind === 'clip') {
     const c = clipById(item.id);
     v.src = '/media/' + item.id + '.mp4';
@@ -353,10 +353,21 @@ function goLive() {
   v.pause(); v.removeAttribute('src'); v.load();
   playing = null;
   document.body.classList.remove('playing');
-  $('live').src = '/stream.mjpg?' + Date.now();
+  restartLive();
   $('badge').textContent = 'LIVE'; $('badge').classList.add('live');
   if (tabIs('recordings')) renderRecordings();
 }
+
+// A fresh <img> for every (re)start: browsers often leave a reused or backgrounded
+// MJPEG <img> stalled on a black or frozen frame until the page is reloaded.
+function restartLive() {
+  const old = $('live'), img = old.cloneNode(false);
+  img.src = '/stream.mjpg?' + Date.now();
+  old.removeAttribute('src');
+  old.replaceWith(img);
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && !playing) restartLive(); });
+addEventListener('pageshow', e => { if (e.persisted && !playing) restartLive(); });
 
 // prev/next walk the selected day's clips in time order
 function dayClips() { return (lib ? lib.clips : []).filter(c => c.date === selectedDay && !c.recording).sort((a, b) => a.tod - b.tod); }

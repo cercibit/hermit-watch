@@ -470,14 +470,19 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=FRAME")
             self.end_headers()
             try:
+                # Send the current frame straight away (with a slow shutter the next one
+                # can be a second off), and close each part with the boundary: browsers
+                # only draw a frame once they see the boundary after it.
+                self.wfile.write(b"--FRAME\r\n")
+                frame = output.frame or self.next_frame()
                 while True:
-                    frame = self.next_frame()
-                    self.wfile.write(b"--FRAME\r\n")
                     self.send_header("Content-Type", "image/jpeg")
                     self.send_header("Content-Length", len(frame))
                     self.end_headers()
                     self.wfile.write(frame)
-                    self.wfile.write(b"\r\n")
+                    self.wfile.write(b"\r\n--FRAME\r\n")
+                    self.wfile.flush()
+                    frame = self.next_frame()
             except Exception as e:
                 logging.info("Client %s disconnected: %s", self.client_address, e)
         else:
