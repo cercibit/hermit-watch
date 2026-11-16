@@ -8,12 +8,20 @@
 #   ./hermitwatch.sh status    running or not, plus the stream URL
 #   ./hermitwatch.sh logs      follow the server log (Ctrl-C to quit)
 #
-# Override the target with HERMITWATCH_HOST (default pi@raspberrypi).
+# Target Pi: $HERMITWATCH_HOST, else the first line of .hermitwatch-host next to
+# this script (git-ignored, so your host name stays out of the repo), else pi@raspberrypi.
 set -euo pipefail
 
-HOST="${HERMITWATCH_HOST:-pi@raspberrypi}"
-NAME="${HOST#*@}"
 DIR="$(cd "$(dirname "$0")" && pwd)"
+HOST_FILE="$DIR/.hermitwatch-host"
+if [ -n "${HERMITWATCH_HOST:-}" ]; then
+  HOST="$HERMITWATCH_HOST"
+elif [ -s "$HOST_FILE" ]; then
+  HOST="$(head -n 1 "$HOST_FILE" | tr -d '[:space:]')"
+else
+  HOST="pi@raspberrypi"
+fi
+NAME="${HOST#*@}"
 # Pattern anchored on "python3" so pkill/pgrep never match this script's own ssh command.
 PATTERN='^python3 .*cam_stream'
 
@@ -69,6 +77,10 @@ deploy() {
   start
 }
 
+case "${1:-start}" in start|stop|restart|deploy|status|logs)
+  remote true 2>/dev/null || { echo "Cannot reach $HOST over SSH (is it on and on Tailscale?)." >&2; exit 1; } ;;
+esac
+
 case "${1:-start}" in
   start) start ;;
   stop) stop ;;
@@ -76,5 +88,5 @@ case "${1:-start}" in
   deploy) deploy ;;
   status) status ;;
   logs) remote "tail -n 50 -f ~/cam_stream.log" ;;
-  *) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

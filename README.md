@@ -90,7 +90,13 @@ address.
 | `./hermitwatch.sh status` | Show whether it's running, with the URL |
 | `./hermitwatch.sh logs` | Follow the server log |
 
-It targets `pi@raspberrypi` by default; set `HERMITWATCH_HOST=user@host` to use another Pi.
+It targets `pi@raspberrypi` by default. To point it at your Pi, put `user@host` in a
+`.hermitwatch-host` file next to the script (git ignores it, so your host name stays
+out of the repo), or set `HERMITWATCH_HOST=user@host` for one command:
+
+```bash
+echo 'pi@my-pi' > .hermitwatch-host
+```
 
 ## Using the web page
 
