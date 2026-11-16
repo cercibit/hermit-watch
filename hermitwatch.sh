@@ -53,7 +53,7 @@ start() {
   for _ in $(seq 1 15); do
     sleep 1
     if remote "grep -q 'Streaming on' $LOG"; then
-      echo "HermitWatch started from $APP."
+      echo "HermitWatch started from ${APP/\$HOME/~}."
       status
       return
     fi
