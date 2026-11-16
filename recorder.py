@@ -1,6 +1,6 @@
 """HermitWatch motion detection, motion-triggered clips, time-lapse and storage.
 
-Layout under REC_DIR (default ~/hermitwatch):
+Layout under REC_DIR (default ~/hermit-watch-recordings):
   clips/YYYY-MM-DD/HHMMSS.mp4   motion clip (H.264, includes pre-roll)
   clips/YYYY-MM-DD/HHMMSS.jpg   thumbnail taken when motion started
   clips/YYYY-MM-DD/HHMMSS.json  {"start", "end", "duration", "peak"} written when the clip closes
@@ -23,7 +23,7 @@ from picamera2.outputs import PyavOutput
 
 log = logging.getLogger("recorder")
 
-REC_DIR = os.path.realpath(os.path.expanduser(os.environ.get("REC_DIR", "~/hermitwatch")))
+REC_DIR = os.path.realpath(os.path.expanduser(os.environ.get("REC_DIR", "~/hermit-watch-recordings")))
 CLIPS = os.path.join(REC_DIR, "clips")
 TIMELAPSE = os.path.join(REC_DIR, "timelapse")
 MIN_FREE_BYTES = 1 << 30  # stop writing when the SD card has < 1 GB free

@@ -22,7 +22,7 @@ Endpoints:
   /api/recordings GET library; /api/recordings/delete, /api/timelapse/build (POST)
   /media/<path>   recorded files (supports Range for video seeking)
 
-Recordings live in ~/hermitwatch (REC_DIR=...); see recorder.py.
+Recordings live in ~/hermit-watch-recordings (REC_DIR=...); see recorder.py.
 """
 import base64
 import hmac

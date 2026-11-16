@@ -56,47 +56,57 @@ address.
 
 ## Setup
 
-1. **Copy the files** to the Pi's home directory (or clone this repo there):
+All of this happens on the Pi.
+
+1. **Clone the project** into `~/hermit-watch`:
 
    ```bash
-   scp cam_stream.py recorder.py ui.html pi@<your-pi>:~/
+   git clone https://github.com/cercibit/hermit-watch.git ~/hermit-watch
    ```
 
-2. **Create the login** on the Pi: one line, `username:password`, readable only by you:
+2. **Create the login**: one line, `username:password`, readable only by you.
+   It lives outside the project folder, so it can never be committed:
 
    ```bash
-   ssh pi@<your-pi>
    umask 077; printf '%s' 'myname:my-password' > ~/.cam_stream_auth
    ```
 
-3. **Start it**, either with the helper script from your computer (below) or on the Pi:
+3. **Start it**:
 
    ```bash
-   nohup python3 ~/cam_stream.py > ~/cam_stream.log 2>&1 < /dev/null &
+   cd ~/hermit-watch && ./hermitwatch.sh start
    ```
 
 4. Open **`http://<your-pi>:8000/`** from any device on your tailnet and sign in.
 
 ## The helper script
 
-`hermitwatch.sh` controls the Pi from your computer over SSH:
+`hermitwatch.sh` works in two places:
+
+- **On the Pi**, from the project folder, it controls the local server.
+- **On another computer** (a clone of this repo there), it runs the same commands
+  on the Pi over SSH.
 
 | Command | What it does |
 |---|---|
 | `./hermitwatch.sh start` | Start (no-op if already running) and confirm it's streaming |
 | `./hermitwatch.sh stop` | Stop (forces it after 10 s) |
 | `./hermitwatch.sh restart` | Stop, then start |
-| `./hermitwatch.sh deploy` | Copy `cam_stream.py`, `recorder.py`, `ui.html` to the Pi, then restart |
+| `./hermitwatch.sh update` | `git pull` the project on the Pi, then restart |
 | `./hermitwatch.sh status` | Show whether it's running, with the URL |
 | `./hermitwatch.sh logs` | Follow the server log |
 
-It targets `pi@raspberrypi` by default. To point it at your Pi, put `user@host` in a
-`.hermitwatch-host` file next to the script (git ignores it, so your host name stays
-out of the repo), or set `HERMITWATCH_HOST=user@host` for one command:
+From another computer it targets `pi@raspberrypi` by default. To point it at your Pi,
+put `user@host` in a `.hermitwatch-host` file next to the script (git ignores it, so
+your host name stays out of the repo), or set `HERMITWATCH_HOST=user@host` for one
+command. Set `HERMITWATCH_DIR` if the project isn't in `~/hermit-watch` on the Pi.
 
 ```bash
 echo 'pi@my-pi' > .hermitwatch-host
 ```
+
+**Typical workflow:** edit and commit on your computer, `git push`, then
+`./hermitwatch.sh update` so the Pi pulls the change and restarts.
 
 ## Using the web page
 
@@ -133,11 +143,12 @@ per frame. For smooth video, add light and use a shorter shutter.
 
 | Path | Contents |
 |---|---|
+| `~/hermit-watch/` | the project (this repo); the server runs from here |
 | `~/.cam_stream_auth` | `username:password` for the web page (keep it `chmod 600`) |
 | `~/.cam_stream_settings.json` | camera and recording settings |
-| `~/hermitwatch/clips/YYYY-MM-DD/HHMMSS.mp4` | motion clips (`.jpg` thumbnail, `.json` start/end/duration/peak) |
-| `~/hermitwatch/timelapse/YYYY-MM-DD/*.jpg` | time-lapse photos |
-| `~/hermitwatch/timelapse/YYYY-MM-DD.mp4` | built time-lapse video |
+| `~/hermit-watch-recordings/clips/YYYY-MM-DD/HHMMSS.mp4` | motion clips (`.jpg` thumbnail, `.json` start/end/duration/peak) |
+| `~/hermit-watch-recordings/timelapse/YYYY-MM-DD/*.jpg` | time-lapse photos |
+| `~/hermit-watch-recordings/timelapse/YYYY-MM-DD.mp4` | built time-lapse video |
 | `~/cam_stream.log` | server log |
 
 Environment variables: `PORT` (8000), `WIDTH`/`HEIGHT` (1296×972), `BIND`
