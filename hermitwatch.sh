@@ -4,7 +4,7 @@
 #   ./hermitwatch.sh start     start it (does nothing if already running)
 #   ./hermitwatch.sh stop      stop it
 #   ./hermitwatch.sh restart   stop, then start
-#   ./hermitwatch.sh deploy    copy cam_stream.py + recorder.py to the Pi, then restart
+#   ./hermitwatch.sh deploy    copy cam_stream.py, recorder.py, ui.html to the Pi, then restart
 #   ./hermitwatch.sh status    running or not, plus the stream URL
 #   ./hermitwatch.sh logs      follow the server log (Ctrl-C to quit)
 #
@@ -56,15 +56,15 @@ stop() {
 
 status() {
   if running; then
-    echo "Running on $NAME: http://$NAME:8000/  (recordings: http://$NAME:8000/recordings)"
+    echo "Running on $NAME: http://$NAME:8000/  (recordings: http://$NAME:8000/#recordings)"
   else
     echo "Not running on $NAME."
   fi
 }
 
 deploy() {
-  scp -q "$DIR/cam_stream.py" "$DIR/recorder.py" "$HOST:~/"
-  echo "Copied cam_stream.py and recorder.py to $NAME."
+  scp -q "$DIR/cam_stream.py" "$DIR/recorder.py" "$DIR/ui.html" "$HOST:~/"
+  echo "Copied cam_stream.py, recorder.py and ui.html to $NAME."
   stop
   start
 }

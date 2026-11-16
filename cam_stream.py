@@ -13,12 +13,12 @@ Camera settings persist in ~/.cam_stream_settings.json (SETTINGS_FILE=...).
 Env vars: PORT (default 8000), WIDTH/HEIGHT (default 1296x972).
 
 Endpoints:
-  /               viewer + control panel
+  /               viewer, camera controls and recordings (ui.html)
   /stream.mjpg    raw MJPEG stream (VLC/ffplay)
   /snapshot.jpg   single JPEG frame
   /api/settings   GET schema+values, POST partial update ({"reset": true} resets)
   /api/status     GET live exposure/gain/white-balance metadata + motion state
-  /recordings     browse motion clips and time-lapses
+  /recordings     redirects to /#recordings
   /api/recordings GET library; /api/recordings/delete, /api/timelapse/build (POST)
   /media/<path>   recorded files (supports Range for video seeking)
 
@@ -351,316 +351,14 @@ recorder = None  # created in __main__ once the camera is running
 # Web UI
 # ---------------------------------------------------------------------------
 
-PAGE = """<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>HermitWatch</title>
-<style>
-  :root { color-scheme: dark; --bg:#0f1115; --panel:#171a21; --line:#262b36; --fg:#e6e8ee; --dim:#8b93a7; --acc:#e0894a; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.4 -apple-system,system-ui,sans-serif;
-         display:flex; height:100vh; overflow:hidden; }
-  #view { flex:1; display:flex; flex-direction:column; min-width:0; }
-  #video { flex:1; display:flex; align-items:center; justify-content:center; min-height:0; background:#000; }
-  #video img { max-width:100%; max-height:100%; }
-  .rec { color:#ff5a5a; font-weight:600; } .mov { color:var(--acc); font-weight:600; }
-  #status { padding:8px 14px; font:12px ui-monospace,Menlo,monospace; color:var(--dim);
-            border-top:1px solid var(--line); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  #panel { width:340px; background:var(--panel); border-left:1px solid var(--line); overflow-y:auto; padding:6px 16px 20px; }
-  h1 { font-size:16px; margin:12px 0 4px; letter-spacing:.3px; }
-  h2 { font-size:11px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin:18px 0 6px;
-       padding-top:12px; border-top:1px solid var(--line); }
-  .row { margin:9px 0; }
-  .row.hidden { display:none; }
-  .lab { display:flex; justify-content:space-between; font-size:13px; margin-bottom:3px; }
-  .val { color:var(--dim); font-variant-numeric:tabular-nums; cursor:pointer; }
-  input[type=range] { width:100%; accent-color:var(--acc); }
-  select { width:100%; background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:5px; }
-  label.chk { display:flex; align-items:center; gap:8px; cursor:pointer; }
-  input[type=checkbox] { accent-color:var(--acc); width:16px; height:16px; }
-  .btns { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
-  button { background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:6px;
-           padding:6px 10px; cursor:pointer; font-size:12px; }
-  button:hover { border-color:var(--acc); }
-  .hint { color:var(--dim); font-size:11px; }
-  @media (max-width: 800px) { body { flex-direction:column; overflow:auto; height:auto; }
-    #panel { width:auto; border-left:0; } #video { min-height:50vh; } }
-</style></head>
-<body>
-<div id="view">
-  <div id="video"><img src="/stream.mjpg" alt="live stream"></div>
-  <div id="status">connecting…</div>
-</div>
-<div id="panel">
-  <h1>HermitWatch</h1>
-  <div class="hint">Changes apply live and are saved on the Pi. Double-click a value to reset it.</div>
-  <div class="btns">
-    <button onclick="location.href='/recordings'">Recordings</button>
-    <button onclick="api('/api/record', {seconds: 30})" title="Record a 30 s clip now, motion or not">Record 30 s</button>
-    <button onclick="window.open('/snapshot.jpg?'+Date.now())">Snapshot</button>
-    <button onclick="lockExposure()" title="Switch to manual using the current auto exposure">Lock exposure</button>
-    <button onclick="lockWB()" title="Switch to manual using the current auto white balance">Lock white balance</button>
-    <button onclick="resetAll()">Reset all</button>
-  </div>
-  <div id="controls"></div>
-</div>
-<script>
-let schema = [], values = {}, pending = {}, inflight = false, status = {};
-const els = {};
-
-async function api(path, body) {
-  const opts = body === undefined ? {} :
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
-  const r = await fetch(path, opts);
-  if (!r.ok) throw new Error(path + ' ' + r.status);
-  return r.json();
-}
-
-const LOGN = 1000;
-const toPos = (f, v) => f.scale === 'log' ? Math.round(LOGN * Math.log(v / f.min) / Math.log(f.max / f.min)) : v;
-const fromPos = (f, p) => f.scale === 'log' ? Math.round(f.min * Math.pow(f.max / f.min, p / LOGN)) : +p;
-
-function fmt(f, v) {
-  if (f.unit === 'us') return v >= 1000 ? (v / 1000).toFixed(v >= 100000 ? 0 : 1) + ' ms' : v + ' µs';
-  const d = f.step >= 1 ? 0 : String(f.step).split('.')[1].length;
-  return (+v).toFixed(d) + (f.unit ? ' ' + f.unit : '');
-}
-
-function visible(f) {
-  if (!f.when) return true;
-  const neg = f.when[0] === '!';
-  const on = !!values[f.when.replace('!', '')];
-  return neg ? !on : on;
-}
-
-function build() {
-  const root = document.getElementById('controls');
-  root.innerHTML = '';
-  let group = null;
-  for (const f of schema) {
-    if (f.group !== group) {
-      group = f.group;
-      const h = document.createElement('h2'); h.textContent = group; root.appendChild(h);
-    }
-    const row = document.createElement('div'); row.className = 'row';
-    let input, val;
-    if (f.type === 'bool') {
-      const lab = document.createElement('label'); lab.className = 'chk';
-      input = document.createElement('input'); input.type = 'checkbox';
-      input.onchange = () => send(f.id, input.checked);
-      lab.append(input, document.createTextNode(f.label));
-      row.appendChild(lab);
-    } else {
-      const head = document.createElement('div'); head.className = 'lab';
-      const name = document.createElement('span'); name.textContent = f.label;
-      val = document.createElement('span'); val.className = 'val'; val.title = 'double-click to reset';
-      val.ondblclick = () => send(f.id, f.default);
-      head.append(name, val); row.appendChild(head);
-      if (f.type === 'select') {
-        input = document.createElement('select');
-        f.options.forEach((o, i) => input.add(new Option(o, i)));
-        input.onchange = () => send(f.id, +input.value);
-        val.style.display = 'none';
-      } else {
-        input = document.createElement('input'); input.type = 'range';
-        if (f.scale === 'log') { input.min = 0; input.max = LOGN; input.step = 1; }
-        else { input.min = f.min; input.max = f.max; input.step = f.step; }
-        input.oninput = () => { const v = fromPos(f, input.value); val.textContent = fmt(f, v); send(f.id, v); };
-        input.ondblclick = () => send(f.id, f.default);
-      }
-      row.appendChild(input);
-    }
-    root.appendChild(row);
-    els[f.id] = { f, row, input, val };
-  }
-}
-
-function sync() {
-  for (const { f, row, input, val } of Object.values(els)) {
-    row.classList.toggle('hidden', !visible(f));
-    if (document.activeElement === input && f.type === 'range') continue;
-    const v = values[f.id];
-    if (f.type === 'bool') input.checked = !!v;
-    else if (f.type === 'select') input.value = v;
-    else { input.value = toPos(f, v); val.textContent = fmt(f, v); }
-  }
-}
-
-function send(id, v) {
-  values[id] = v; pending[id] = v;
-  for (const { f, row } of Object.values(els)) row.classList.toggle('hidden', !visible(f));
-  flush();
-}
-
-async function flush(extra) {
-  if (inflight || (!Object.keys(pending).length && !extra)) return;
-  inflight = true;
-  const body = Object.assign({}, pending, extra || {}); pending = {};
-  try { const r = await api('/api/settings', body); values = Object.assign(r.values, pending); }
-  catch (e) { document.getElementById('status').textContent = 'error: ' + e.message; }
-  finally { inflight = false; }
-  if (Object.keys(pending).length) flush(); else sync();
-}
-
-async function resetAll() {
-  if (!confirm('Reset all camera settings to defaults?')) return;
-  pending = {}; await flush({ reset: true });
-}
-
-async function lockExposure() {
-  const s = await api('/api/status');
-  if (!s.ExposureTime) return;
-  pending = Object.assign(pending, { ae_auto: false, exposure_us: s.ExposureTime, gain: +s.AnalogueGain.toFixed(1) });
-  values = Object.assign(values, pending); sync(); flush();
-}
-
-async function lockWB() {
-  const s = await api('/api/status');
-  if (!s.ColourGains) return;
-  pending = Object.assign(pending, { awb_auto: false, red_gain: +s.ColourGains[0].toFixed(2), blue_gain: +s.ColourGains[1].toFixed(2) });
-  values = Object.assign(values, pending); sync(); flush();
-}
-
-async function pollStatus() {
-  try {
-    const s = await api('/api/status');
-    const parts = [];
-    const m = s.motion;
-    if (m) {
-      if (m.recording) parts.push('<span class="rec">● REC' + (m.forced ? ' (manual)' : '') + '</span>');
-      if (m.lighting_change) parts.push('lighting change (ignored)');
-      else parts.push((m.moving ? '<span class="mov">MOTION</span> ' : 'motion ') + m.score.toFixed(2) + '%');
-    }
-    if (s.ExposureTime) parts.push('shutter ' + (s.ExposureTime / 1000).toFixed(1) + ' ms');
-    if (s.AnalogueGain) parts.push('gain ' + s.AnalogueGain.toFixed(2));
-    if (s.FrameDuration) parts.push((1e6 / s.FrameDuration).toFixed(1) + ' fps');
-    if (s.ColourTemperature) parts.push(s.ColourTemperature + ' K');
-    if (s.ColourGains) parts.push('R/B ' + s.ColourGains.map(g => g.toFixed(2)).join('/'));
-    if (s.Lux !== undefined) parts.push(s.Lux.toFixed(0) + ' lux');
-    document.getElementById('status').innerHTML = parts.join('  ·  ') || 'no status';
-  } catch (e) { document.getElementById('status').textContent = 'status unavailable'; }
-  setTimeout(pollStatus, 1000);
-}
-
-(async () => {
-  const r = await api('/api/settings');
-  schema = r.schema; values = r.values;
-  build(); sync(); pollStatus();
-})();
-</script>
-</body></html>"""
+UI_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui.html")
 
 
-RECORDINGS_PAGE = """<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>HermitWatch recordings</title>
-<style>
-  :root { color-scheme: dark; --bg:#0f1115; --panel:#171a21; --line:#262b36; --fg:#e6e8ee; --dim:#8b93a7; --acc:#e0894a; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.4 -apple-system,system-ui,sans-serif; }
-  header { display:flex; align-items:center; gap:14px; padding:12px 18px; border-bottom:1px solid var(--line);
-           position:sticky; top:0; background:var(--bg); z-index:2; }
-  header h1 { font-size:16px; margin:0; } header .dim { margin-left:auto; }
-  main { padding:6px 18px 40px; max-width:1300px; }
-  h2 { font-size:12px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin:22px 0 10px; }
-  h3 { font-size:13px; margin:16px 0 8px; color:var(--fg); }
-  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(210px, 1fr)); gap:12px; }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
-  .card img { width:100%; aspect-ratio:4/3; object-fit:cover; display:block; background:#000; cursor:pointer; }
-  .card .meta { padding:8px 10px; display:flex; justify-content:space-between; align-items:center; gap:6px; font-size:12px; }
-  .dim { color:var(--dim); font-size:12px; }
-  .rec { color:#ff5a5a; font-weight:600; }
-  button, a.btn { background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:6px;
-           padding:5px 9px; cursor:pointer; font-size:12px; text-decoration:none; }
-  button:hover, a.btn:hover { border-color:var(--acc); }
-  button.del:hover { border-color:#ff5a5a; color:#ff5a5a; }
-  .tl { display:flex; gap:14px; align-items:center; background:var(--panel); border:1px solid var(--line);
-        border-radius:8px; padding:10px; margin-bottom:10px; }
-  .tl img { width:160px; aspect-ratio:4/3; object-fit:cover; border-radius:4px; background:#000; }
-  .tl .info { flex:1; } .tl .actions { display:flex; gap:6px; flex-wrap:wrap; }
-  #modal { position:fixed; inset:0; background:rgba(0,0,0,.85); display:none; align-items:center; justify-content:center;
-           flex-direction:column; gap:10px; z-index:5; }
-  #modal video { max-width:94vw; max-height:84vh; background:#000; }
-  .empty { color:var(--dim); padding:10px 0; }
-</style></head>
-<body>
-<header><a class="btn" href="/">← Live</a><h1>Recordings</h1><span class="dim" id="disk"></span></header>
-<main>
-  <h2>Time-lapse</h2><div id="tl"></div>
-  <h2>Motion clips</h2><div id="clips"></div>
-</main>
-<div id="modal" onclick="if(event.target===this)closeModal()">
-  <video id="player" controls playsinline></video>
-  <div><span class="dim" id="ptitle"></span> <button onclick="closeModal()">Close</button></div>
-</div>
-<script>
-const gb = b => (b / 1073741824).toFixed(b > 1073741824 * 10 ? 0 : 1) + ' GB';
-const mb = b => b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB';
-const hms = t => t ? t.slice(0, 2) + ':' + t.slice(2, 4) + ':' + t.slice(4, 6) : '';
-const dur = d => d === undefined ? '' : d >= 60 ? Math.floor(d / 60) + 'm ' + Math.round(d % 60) + 's' : Math.round(d) + 's';
-const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+def ui_page():
+    """Read the web UI on each request so a deploy only needs ui.html copied."""
+    with open(UI_FILE, "rb") as f:
+        return f.read()
 
-async function post(path, body) {
-  const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  const j = await r.json();
-  if (!r.ok) alert(j.error || r.status);
-  return j;
-}
-
-function play(src, title) {
-  const v = document.getElementById('player');
-  v.src = src; document.getElementById('ptitle').textContent = title;
-  document.getElementById('modal').style.display = 'flex'; v.play();
-}
-function closeModal() {
-  const v = document.getElementById('player'); v.pause(); v.removeAttribute('src'); v.load();
-  document.getElementById('modal').style.display = 'none';
-}
-
-async function delClip(id) { if (confirm('Delete this clip?')) { await post('/api/recordings/delete', { clip: id }); load(); } }
-async function delDay(d) { if (confirm('Delete all time-lapse photos and video for ' + d + '?')) { await post('/api/recordings/delete', { timelapse: d }); load(); } }
-async function build(d) { await post('/api/timelapse/build', { date: d, fps: +document.getElementById('fps-' + d).value }); load(); }
-
-function render(lib) {
-  document.getElementById('disk').textContent = gb(lib.disk.used) + ' used · ' + gb(lib.disk.free) + ' free on SD card';
-  const tl = document.getElementById('tl');
-  tl.innerHTML = lib.timelapse.length ? lib.timelapse.map(t => `
-    <div class="tl">
-      ${t.latest ? `<img src="/media/${esc(t.latest)}" loading="lazy">` : ''}
-      <div class="info"><b>${esc(t.date)}</b><div class="dim">${t.count} photos · ${hms(t.first)} – ${hms(t.last)}
-        ${t.video ? ' · video ' + mb(t.video_size) : ''}</div></div>
-      <div class="actions">
-        ${t.building ? '<span class="dim">building video…</span>' : `
-          <select id="fps-${esc(t.date)}" title="playback speed"><option value="10">10 fps</option><option value="15" selected>15 fps</option><option value="30">30 fps</option></select>
-          <button onclick="build('${esc(t.date)}')">${t.video ? 'Rebuild' : 'Build'} video</button>`}
-        ${t.video ? `<button onclick="play('/media/timelapse/${esc(t.date)}.mp4', 'Time-lapse ${esc(t.date)}')">Play</button>
-                     <a class="btn" href="/media/timelapse/${esc(t.date)}.mp4" download>Download</a>` : ''}
-        <button class="del" onclick="delDay('${esc(t.date)}')">Delete</button>
-      </div>
-    </div>`).join('') : '<div class="empty">No time-lapse photos yet.</div>';
-
-  const byDay = {};
-  for (const c of lib.clips) (byDay[c.date] = byDay[c.date] || []).push(c);
-  const clips = document.getElementById('clips');
-  clips.innerHTML = Object.keys(byDay).length ? Object.entries(byDay).map(([day, list]) => `
-    <h3>${esc(day)} <span class="dim">· ${list.length} clip${list.length > 1 ? 's' : ''}</span></h3>
-    <div class="grid">${list.map(c => `
-      <div class="card">
-        ${c.thumb ? `<img src="/media/${esc(c.id)}.jpg" loading="lazy" onclick="play('/media/${esc(c.id)}.mp4', '${esc(c.date)} ${esc(c.time)}')">` : ''}
-        <div class="meta">
-          <span><b>${esc(c.time)}</b>${c.manual ? ' <span class="dim">manual</span>' : ''} ${c.recording ? '<span class="rec">● REC</span>' : '<span class="dim">' + dur(c.duration) + ' · ' + mb(c.size) + '</span>'}</span>
-          ${c.recording ? '' : `<span><a class="btn" href="/media/${esc(c.id)}.mp4" download>⤓</a>
-            <button class="del" onclick="delClip('${esc(c.id)}')">✕</button></span>`}
-        </div>
-      </div>`).join('')}</div>`).join('') : '<div class="empty">No motion clips yet.</div>';
-}
-
-async function load() {
-  try { render(await (await fetch('/api/recordings')).json()); } catch (e) { console.error(e); }
-}
-load();
-setInterval(() => { if (document.getElementById('modal').style.display !== 'flex') load(); }, 5000);
-</script>
-</body></html>"""
 
 MEDIA_TYPES = {".mp4": "video/mp4", ".jpg": "image/jpeg", ".json": "application/json"}
 
@@ -747,14 +445,17 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
             return
         path = self.path.split("?")[0]
         if path in ("/", "/index.html"):
-            self.send_body(PAGE.encode(), "text/html; charset=utf-8")
+            self.send_body(ui_page(), "text/html; charset=utf-8")
         elif path == "/api/settings":
             with settings_lock:
                 self.send_json({"schema": SCHEMA, "values": dict(settings)})
         elif path == "/api/status":
             self.send_json(camera_status())
-        elif path == "/recordings":
-            self.send_body(RECORDINGS_PAGE.encode(), "text/html; charset=utf-8")
+        elif path == "/recordings":  # old bookmark: recordings now live in a tab
+            self.send_response(302)
+            self.send_header("Location", "/#recordings")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
         elif path == "/api/recordings":
             self.send_json(recorder.library())
         elif path.startswith("/media/"):

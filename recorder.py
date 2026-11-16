@@ -231,10 +231,16 @@ class Recorder(threading.Thread):
                     continue
                 for name in sorted((n for n in os.listdir(ddir) if n.endswith(".mp4")), reverse=True):
                     stem = os.path.join(ddir, name[:-4])
+                    midnight = datetime.strptime(day, "%Y-%m-%d").timestamp()
                     meta = {}
                     if os.path.exists(stem + ".json"):
                         with open(stem + ".json") as f:
                             meta = json.load(f)
+                    else:  # still recording (or interrupted): estimate from the file name
+                        start = midnight + int(name[0:2]) * 3600 + int(name[2:4]) * 60 + int(name[4:6]) - self.preroll_s
+                        end = time.time() if stem == active else os.path.getmtime(stem + ".mp4")
+                        meta = {"start": start, "end": end, "duration": round(max(0, end - start), 1)}
+                    meta["tod"] = round(max(0.0, meta["start"] - midnight), 1)  # seconds since local midnight
                     clips.append({
                         "id": os.path.relpath(stem, REC_DIR),
                         "date": day,
